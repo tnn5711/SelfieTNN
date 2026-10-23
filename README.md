@@ -12,9 +12,8 @@ open SelfieTNN.xcodeproj
 Set your signing team, run on a real device (camera required, iOS 17+).
 
 ## Structure
-- `BeautyFilter.swift` – Vision face detection + Core Image pipeline; takes a `CIImage`, so it can be reused per video frame.
-- `CameraManager.swift` – AVCapture session, live preview frames, photo capture, save to Photos.
-- `ContentView.swift` – UI.
-
-## Video later
-Add an `AVCaptureAudioDataOutput` + `AVAssetWriter`, and append the filtered frames produced in `captureOutput`.
+- `BeautyFilter.swift` – Vision face landmarks + Core Image pipeline; takes a `CIImage`, shared by preview, photos and video.
+- `CameraManager.swift` – AVCapture session, live preview frames, photo capture, recording control.
+- `VideoRecorder.swift` – AVAssetWriter that encodes beautified frames and mic audio to `.mov`.
+- `PhotoStore.swift` – private on-device storage for photos and videos, save to Photos, delete.
+- `ContentView.swift` / `GalleryView.swift` – UI.

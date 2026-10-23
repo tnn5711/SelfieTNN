@@ -19,6 +19,9 @@ struct PreviewView: UIViewRepresentable {
 struct ContentView: View {
     @StateObject private var camera = CameraManager()
     @State private var showGallery = false
+    @State private var videoMode = false
+
+    private var isRecording: Bool { camera.recordingStartedAt != nil }
 
     var body: some View {
         ZStack {
@@ -36,10 +39,20 @@ struct ContentView: View {
                             .font(.title2).padding(12).background(.ultraThinMaterial, in: Circle())
                     }
                     Spacer()
+                    if let start = camera.recordingStartedAt {
+                        TimelineView(.periodic(from: start, by: 1)) { ctx in
+                            let s = Int(ctx.date.timeIntervalSince(start))
+                            Label(String(format: "%d:%02d", s / 60, s % 60), systemImage: "record.circle")
+                                .foregroundStyle(.red).padding(8)
+                                .background(.ultraThinMaterial, in: Capsule())
+                        }
+                    }
+                    Spacer()
                     Button { camera.flip() } label: {
                         Image(systemName: "arrow.triangle.2.circlepath.camera")
                             .font(.title2).padding(12).background(.ultraThinMaterial, in: Circle())
                     }
+                    .disabled(isRecording)
                 }.padding()
                 Spacer()
                 controls
@@ -69,9 +82,27 @@ struct ContentView: View {
                 slider("Bright", $camera.settings.brightness)
                 slider("Warm", $camera.settings.warmth)
             }
-            Button { camera.capture() } label: {
+            Picker("Mode", selection: $videoMode) {
+                Text("Photo").tag(false)
+                Text("Video").tag(true)
+            }
+            .pickerStyle(.segmented).padding(.horizontal)
+            .disabled(isRecording)
+            Button {
+                if !videoMode { camera.capture() }
+                else if isRecording { camera.stopRecording() }
+                else { camera.startRecording() }
+            } label: {
                 Circle().strokeBorder(.white, lineWidth: 4).frame(width: 72, height: 72)
-                    .overlay(Circle().fill(.white).padding(7))
+                    .overlay(
+                        Group {
+                            if videoMode && isRecording {
+                                RoundedRectangle(cornerRadius: 6).fill(.red).padding(22)
+                            } else {
+                                Circle().fill(videoMode ? Color.red : Color.white).padding(7)
+                            }
+                        }
+                    )
             }
         }
         .padding(.vertical, 12)

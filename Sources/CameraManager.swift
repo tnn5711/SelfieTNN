@@ -10,10 +10,14 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var lastSaved = false
     @Published var lastPhotoURL: URL?
     @Published var errorMessage: String?
+    @Published var recordingStartedAt: Date?
 
     private let session = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
+    private let audioOutput = AVCaptureAudioDataOutput()
     private let photoOutput = AVCapturePhotoOutput()
+    private var audioInput: AVCaptureDeviceInput?
+    private var recorder: VideoRecorder?   // touched only on frameQueue
     private let sessionQueue = DispatchQueue(label: "camera.session")
     private let frameQueue = DispatchQueue(label: "camera.frames")
     private let liveFilter = BeautyFilter()
@@ -35,7 +39,10 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    func stop() { sessionQueue.async { self.session.stopRunning() } }
+    func stop() {
+        stopRecording()
+        sessionQueue.async { self.session.stopRunning() }
+    }
 
     private func configureAndRun() {
         DispatchQueue.main.async { self.authorized = true }
@@ -97,17 +104,99 @@ final class CameraManager: NSObject, ObservableObject {
         DispatchQueue.main.async {
             guard let url else { self.errorMessage = "Could not save photo."; return }
             self.lastPhotoURL = url
-            self.lastSaved = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.lastSaved = false }
+            self.flashSaved()
         }
+    }
+
+    private func flashSaved() {
+        lastSaved = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.lastSaved = false }
+    }
+
+    // MARK: Video
+
+    func startRecording() {
+        guard recordingStartedAt == nil else { return }
+        recordingStartedAt = Date()
+        requestMicrophone { micAllowed in
+            self.sessionQueue.async {
+                if micAllowed { self.addAudioIfNeeded() }
+                let hasAudio = micAllowed && self.audioInput != nil
+                let settings = hasAudio ? self.audioWriterSettings() : nil
+                self.frameQueue.async {
+                    let r = VideoRecorder()
+                    r.start(audioSettings: settings)
+                    self.recorder = r
+                }
+            }
+        }
+    }
+
+    func stopRecording() {
+        guard recordingStartedAt != nil else { return }
+        recordingStartedAt = nil
+        frameQueue.async {
+            guard let r = self.recorder else { return }
+            self.recorder = nil
+            r.finish { tempURL in
+                let url = tempURL.flatMap { PhotoStore.addVideo(from: $0) }
+                DispatchQueue.main.async {
+                    guard let url else { self.errorMessage = "Could not save video."; return }
+                    self.lastPhotoURL = url
+                    self.flashSaved()
+                }
+            }
+        }
+    }
+
+    private func requestMicrophone(_ done: @escaping (Bool) -> Void) {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: done(true)
+        case .notDetermined: AVCaptureDevice.requestAccess(for: .audio, completionHandler: done)
+        default: done(false)
+        }
+    }
+
+    private func addAudioIfNeeded() {
+        guard audioInput == nil,
+              let mic = AVCaptureDevice.default(for: .audio),
+              let input = try? AVCaptureDeviceInput(device: mic) else { return }
+        session.beginConfiguration()
+        if session.canAddInput(input), session.canAddOutput(audioOutput) {
+            session.addInput(input)
+            audioOutput.setSampleBufferDelegate(self, queue: frameQueue)
+            session.addOutput(audioOutput)
+            audioInput = input
+        }
+        session.commitConfiguration()
+    }
+
+    private func audioWriterSettings() -> [String: Any] {
+        (audioOutput.recommendedAudioSettingsForAssetWriter(writingTo: .mov) as? [String: Any]) ?? [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVNumberOfChannelsKey: 1,
+            AVSampleRateKey: 44100,
+            AVEncoderBitRateKey: 64000
+        ]
     }
 }
 
-extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
+extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        if output === audioOutput {
+            recorder?.appendAudio(sampleBuffer)
+            return
+        }
         guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        var source = CIImage(cvPixelBuffer: buffer)
+        // Cap working resolution to keep filtering and encoding real-time.
+        let scale = min(1, 1920 / max(source.extent.width, source.extent.height))
+        if scale < 1 { source = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) }
+
         let current = settingsLock.withLock { liveSettings }
-        let result = liveFilter.apply(CIImage(cvPixelBuffer: buffer), settings: current)
+        let result = liveFilter.apply(source, settings: current)
+        recorder?.appendVideo(result, time: CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
+                              context: BeautyFilter.context)
         guard let cg = BeautyFilter.context.createCGImage(result, from: result.extent) else { return }
         DispatchQueue.main.async { self.previewImage = cg }
     }

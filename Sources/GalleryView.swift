@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 
 struct GalleryView: View {
@@ -12,19 +13,24 @@ struct GalleryView: View {
         NavigationStack {
             ScrollView {
                 if photos.isEmpty {
-                    Text("No selfies yet").foregroundStyle(.secondary).padding(.top, 80)
+                    Text("Nothing here yet").foregroundStyle(.secondary).padding(.top, 80)
                 }
                 LazyVGrid(columns: columns, spacing: 2) {
                     ForEach(photos, id: \.self) { url in
                         Button { selected = url } label: {
                             Color.clear.aspectRatio(1, contentMode: .fit)
                                 .overlay(AsyncThumb(url: url))
+                                .overlay(alignment: .bottomLeading) {
+                                    if PhotoStore.isVideo(url) {
+                                        Image(systemName: "video.fill").font(.caption).padding(4)
+                                    }
+                                }
                                 .clipped()
                         }
                     }
                 }
             }
-            .navigationTitle("Selfies")
+            .navigationTitle("Library")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .sheet(item: $selected) { url in
                 DetailView(url: url,
@@ -51,11 +57,27 @@ extension URL: @retroactive Identifiable { public var id: String { absoluteStrin
 
 private struct AsyncThumb: View {
     let url: URL
+    @State private var image: UIImage?
+
     var body: some View {
-        if let img = UIImage(contentsOfFile: url.path) {
-            Image(uiImage: img).resizable().scaledToFill()
-        } else {
-            Color.gray
+        Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                Color.gray.opacity(0.3)
+            }
+        }
+        .task {
+            let u = url
+            image = await Task.detached(priority: .utility) { () -> UIImage? in
+                if PhotoStore.isVideo(u) {
+                    let gen = AVAssetImageGenerator(asset: AVURLAsset(url: u))
+                    gen.appliesPreferredTrackTransform = true
+                    gen.maximumSize = CGSize(width: 300, height: 300)
+                    return (try? gen.copyCGImage(at: .zero, actualTime: nil)).map { UIImage(cgImage: $0) }
+                }
+                return UIImage(contentsOfFile: u.path)
+            }.value
         }
     }
 }
@@ -65,11 +87,16 @@ private struct DetailView: View {
     let onSaveToPhotos: () -> Void
     let onDelete: () -> Void
     @State private var confirmDelete = false
+    @State private var player: AVPlayer?
 
     var body: some View {
         NavigationStack {
             Group {
-                if let img = UIImage(contentsOfFile: url.path) {
+                if PhotoStore.isVideo(url) {
+                    VideoPlayer(player: player)
+                        .onAppear { player = AVPlayer(url: url) }
+                        .onDisappear { player?.pause() }
+                } else if let img = UIImage(contentsOfFile: url.path) {
                     Image(uiImage: img).resizable().scaledToFit()
                 }
             }
@@ -82,7 +109,7 @@ private struct DetailView: View {
                     Button("Delete", systemImage: "trash", role: .destructive) { confirmDelete = true }
                 }
             }
-            .confirmationDialog("Delete this selfie?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            .confirmationDialog("Delete this item?", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("Delete", role: .destructive, action: onDelete)
             }
         }

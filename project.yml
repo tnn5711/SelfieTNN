@@ -12,7 +12,8 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: SelfieTNN
-        NSCameraUsageDescription: Used to take selfies.
+        NSCameraUsageDescription: Used to take selfies and record videos.
+        NSMicrophoneUsageDescription: Used to record audio with your videos.
         NSPhotoLibraryAddUsageDescription: Used to save your selfies to Photos.
         UILaunchScreen: {}
         UIRequiresFullScreen: true
@@ -21,3 +22,4 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.apptnn.SelfieTNN
         SWIFT_VERSION: "5.9"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
