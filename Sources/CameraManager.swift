@@ -11,6 +11,7 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var lastPhotoURL: URL?
     @Published var errorMessage: String?
     @Published var recordingStartedAt: Date?
+    @Published var pausedAt: Date?
 
     private let session = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
@@ -117,6 +118,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     func startRecording() {
         guard recordingStartedAt == nil else { return }
+        pausedAt = nil
         recordingStartedAt = Date()
         requestMicrophone { micAllowed in
             self.sessionQueue.async {
@@ -132,9 +134,24 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    func pauseRecording() {
+        guard recordingStartedAt != nil, pausedAt == nil else { return }
+        pausedAt = Date()
+        frameQueue.async { self.recorder?.pause() }
+    }
+
+    func resumeRecording() {
+        guard let paused = pausedAt, let start = recordingStartedAt else { return }
+        // Shift the start so the on-screen timer excludes the paused interval.
+        recordingStartedAt = start.addingTimeInterval(Date().timeIntervalSince(paused))
+        pausedAt = nil
+        frameQueue.async { self.recorder?.resume() }
+    }
+
     func stopRecording() {
         guard recordingStartedAt != nil else { return }
         recordingStartedAt = nil
+        pausedAt = nil
         frameQueue.async {
             guard let r = self.recorder else { return }
             self.recorder = nil
