@@ -1,0 +1,23 @@
+name: SelfieTNN
+options:
+  bundleIdPrefix: com.apptnn
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  SelfieTNN:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: SelfieTNN
+        NSCameraUsageDescription: Used to take selfies.
+        NSPhotoLibraryAddUsageDescription: Used to save your selfies to Photos.
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.apptnn.SelfieTNN
+        SWIFT_VERSION: "5.9"
