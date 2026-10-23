@@ -19,6 +19,7 @@ struct PreviewView: UIViewRepresentable {
 struct ContentView: View {
     @StateObject private var camera = CameraManager()
     @State private var showGallery = false
+    @State private var showSettings = false
     @State private var videoMode = false
 
     private var isRecording: Bool { camera.recordingStartedAt != nil }
@@ -48,6 +49,11 @@ struct ContentView: View {
                         }
                     }
                     Spacer()
+                    Button { showSettings = true } label: {
+                        Image(systemName: "gearshape")
+                            .font(.title2).padding(12).background(.ultraThinMaterial, in: Circle())
+                    }
+                    .disabled(isRecording)
                     Button { camera.flip() } label: {
                         Image(systemName: "arrow.triangle.2.circlepath.camera")
                             .font(.title2).padding(12).background(.ultraThinMaterial, in: Circle())
@@ -66,6 +72,7 @@ struct ContentView: View {
         .tint(.white)
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showGallery) { GalleryView() }
+        .sheet(isPresented: $showSettings) { SettingsView() }
         .onAppear { camera.start() }
         .onDisappear { camera.stop() }
         .alert("Error", isPresented: Binding(get: { camera.errorMessage != nil },
