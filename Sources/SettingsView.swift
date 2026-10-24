@@ -12,7 +12,7 @@ struct SettingsView: View {
                     Button("Change Passcode") { showChange = true }
                 } footer: {
                     if isDefault {
-                        Text("You're still using the default passcode (0612). Please change it.")
+                        Text("You're still using the default passcode. Please change it.")
                             .foregroundStyle(.orange)
                     }
                 }
