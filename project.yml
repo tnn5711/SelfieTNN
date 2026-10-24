@@ -15,6 +15,7 @@ targets:
         NSCameraUsageDescription: Used to take selfies and record videos.
         NSMicrophoneUsageDescription: Used to record audio with your videos.
         NSPhotoLibraryAddUsageDescription: Used to save your selfies to Photos.
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
