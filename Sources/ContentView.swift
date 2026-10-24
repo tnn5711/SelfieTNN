@@ -20,6 +20,7 @@ struct ContentView: View {
     @StateObject private var camera = CameraManager()
     @State private var showGallery = false
     @State private var showSettings = false
+    @State private var showAdjust = false
     @State private var videoMode = false
     @AppStorage("timerSeconds") private var timerSeconds = 0
     @State private var countdown: Int?
@@ -112,11 +113,13 @@ struct ContentView: View {
 
     private var controls: some View {
         VStack(spacing: 10) {
-            Toggle("Beautify", isOn: $camera.settings.enabled).padding(.horizontal)
-            if camera.settings.enabled {
-                slider("Smooth", $camera.settings.smoothing)
-                slider("Bright", $camera.settings.brightness)
-                slider("Warm", $camera.settings.warmth)
+            if showAdjust {
+                Toggle("Beautify", isOn: $camera.settings.enabled).padding(.horizontal)
+                if camera.settings.enabled {
+                    slider("Smooth", $camera.settings.smoothing)
+                    slider("Bright", $camera.settings.brightness)
+                    slider("Warm", $camera.settings.warmth)
+                }
             }
             Picker("Mode", selection: $videoMode) {
                 Text("Photo").tag(false)
@@ -144,7 +147,12 @@ struct ContentView: View {
 
                 shutterButton
 
-                Color.clear.frame(width: 52, height: 52)
+                Button { withAnimation(.easeInOut(duration: 0.2)) { showAdjust.toggle() } } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.title2).frame(width: 52, height: 52)
+                        .background(showAdjust ? .white.opacity(0.35) : .white.opacity(0.2), in: Circle())
+                }
+                .accessibilityLabel(showAdjust ? "Hide adjustments" : "Show adjustments")
             }
         }
         .padding(.vertical, 12)

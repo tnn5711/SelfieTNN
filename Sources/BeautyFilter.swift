@@ -18,8 +18,12 @@ final class BeautyFilter {
         var features: [[CGPoint]]  // eyes, brows, lips as normalized image points
     }
 
+    private static let skinCubeSize = 32
+    private static let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+
     private let faceRequest = VNDetectFaceLandmarksRequest()
     private var cachedFaces: [Face] = []
+    private var cachedSkinCube: Data?
     private var cachedMask: CIImage?
     private var cachedMaskExtent = CGRect.zero
     private var frameCounter = 0
@@ -29,11 +33,11 @@ final class BeautyFilter {
     func apply(_ input: CIImage, settings: BeautySettings, detectEvery: Int = 3) -> CIImage {
         guard settings.enabled else { return input }
         let extent = input.extent
-        let faces = detectFaces(in: input, every: detectEvery)
+        let (faces, skinCube) = detectFaces(in: input, every: detectEvery)
 
         var output = input
         if settings.smoothing > 0, !faces.isEmpty {
-            output = smooth(input, faces: faces, extent: extent, amount: settings.smoothing)
+            output = smooth(input, faces: faces, skinCube: skinCube, extent: extent, amount: settings.smoothing)
         }
 
         let colors = CIFilter.colorControls()
@@ -53,10 +57,10 @@ final class BeautyFilter {
         return output.cropped(to: extent)
     }
 
-    private func detectFaces(in image: CIImage, every n: Int) -> [Face] {
+    private func detectFaces(in image: CIImage, every n: Int) -> (faces: [Face], skinCube: Data?) {
         lock.lock(); defer { lock.unlock() }
         frameCounter += 1
-        if n > 1 && frameCounter % n != 1 { return cachedFaces }
+        if n > 1 && frameCounter % n != 1 { return (cachedFaces, cachedSkinCube) }
         let handler = VNImageRequestHandler(ciImage: image, options: [:])
         try? handler.perform([faceRequest])
         cachedFaces = (faceRequest.results ?? []).map { obs in
@@ -71,49 +75,132 @@ final class BeautyFilter {
             }
             return Face(box: box, features: features)
         }
+        let tones = cachedFaces.compactMap { skinTone(in: image, face: $0) }
+        cachedSkinCube = Self.skinCube(tones: tones)
         cachedMask = nil
-        return cachedFaces
+        return (cachedFaces, cachedSkinCube)
     }
 
-    private func smooth(_ image: CIImage, faces: [Face], extent: CGRect, amount: Double) -> CIImage {
-        let denoise = CIFilter.noiseReduction()
-        denoise.inputImage = image
-        denoise.noiseLevel = Float(0.02 + 0.04 * amount)
-        denoise.sharpness = 0.2
-        let blur = CIFilter.gaussianBlur()
-        blur.inputImage = denoise.outputImage?.clampedToExtent()
-        blur.radius = Float(2 + 6 * amount) * Float(extent.width / 1080)
-        let soft = (blur.outputImage ?? image).cropped(to: extent)
+    /// Average cheek/nose color as (Y, Cb, Cr) in sRGB, so the skin mask adapts to each person's tone and lighting.
+    private func skinTone(in image: CIImage, face: Face) -> SIMD3<Float>? {
+        let e = image.extent, b = face.box
+        let cheek = CGRect(x: e.minX + (b.minX + b.width * 0.25) * e.width,
+                           y: e.minY + (b.minY + b.height * 0.3) * e.height,
+                           width: b.width * 0.5 * e.width,
+                           height: b.height * 0.25 * e.height).intersection(e)
+        guard !cheek.isNull, !cheek.isEmpty else { return nil }
+        let avg = image.applyingFilter("CIAreaAverage", parameters: [kCIInputExtentKey: CIVector(cgRect: cheek)])
+        var px = [UInt8](repeating: 0, count: 4)
+        Self.context.render(avg, toBitmap: &px, rowBytes: 4, bounds: avg.extent, format: .RGBA8, colorSpace: Self.sRGB)
+        return Self.ycbcr(Float(px[0]) / 255, Float(px[1]) / 255, Float(px[2]) / 255)
+    }
 
+    private static func ycbcr(_ r: Float, _ g: Float, _ b: Float) -> SIMD3<Float> {
+        SIMD3(0.299 * r + 0.587 * g + 0.114 * b,
+              0.5 - 0.168736 * r - 0.331264 * g + 0.5 * b,
+              0.5 + 0.5 * r - 0.418688 * g - 0.081312 * b)
+    }
+
+    private static func smoothstep(_ e0: Float, _ e1: Float, _ x: Float) -> Float {
+        let t = min(max((x - e0) / (e1 - e0), 0), 1)
+        return t * t * (3 - 2 * t)
+    }
+
+    /// sRGB lookup cube: white where a color is close in chroma to any detected skin tone and not much darker.
+    private static func skinCube(tones: [SIMD3<Float>]) -> Data? {
+        guard !tones.isEmpty else { return nil }
+        let n = skinCubeSize
+        var cube = [Float](repeating: 0, count: n * n * n * 4)
+        var i = 0
+        for b in 0..<n {
+            for g in 0..<n {
+                for r in 0..<n {
+                    let c = ycbcr(Float(r) / Float(n - 1), Float(g) / Float(n - 1), Float(b) / Float(n - 1))
+                    var p: Float = 0
+                    for t in tones {
+                        let d = hypotf(c.y - t.y, c.z - t.z)
+                        let chroma = 1 - smoothstep(0.035, 0.085, d)
+                        let luma = smoothstep(t.x * 0.3, t.x * 0.55, c.x)
+                        p = max(p, chroma * luma)
+                    }
+                    // Output is decoded as sRGB, so pre-encode to keep the mask linear.
+                    let v = powf(p, 1 / 2.2)
+                    cube[i] = v; cube[i + 1] = v; cube[i + 2] = v; cube[i + 3] = 1
+                    i += 4
+                }
+            }
+        }
+        return cube.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+
+    private func ellipseRect(_ face: Face, in extent: CGRect) -> CGRect {
+        let w = face.box.width * extent.width
+        let h = face.box.height * extent.height
+        let cx = extent.minX + face.box.midX * extent.width
+        let cy = extent.minY + face.box.midY * extent.height + h * 0.05
+        return CGRect(x: cx - w * 0.65, y: cy - h * 0.75, width: w * 1.3, height: h * 1.5)
+    }
+
+    private func smooth(_ image: CIImage, faces: [Face], skinCube: Data?, extent: CGRect, amount: Double) -> CIImage {
+        let region = faces.reduce(CGRect.null) { $0.union(ellipseRect($1, in: extent)) }.intersection(extent)
+        guard !region.isNull, !region.isEmpty else { return image }
+        let scale = Double(extent.width / 1080)
+        let src = image.cropped(to: region).clampedToExtent()
+        func blur(_ sigma: Double) -> CIImage { src.applyingGaussianBlur(sigma: sigma * scale).cropped(to: region) }
+        let fine = blur(1.2)
+        let mid = blur(3)
+        let low = blur(4 + 8 * amount)
+
+        // Structural edges (nose, jaw, eyelids) survive the mid blur; pores and blemishes don't.
+        // Where mid and low differ, fall back to the fine blur so contours stay crisp.
+        let gain: CGFloat = 16, threshold: CGFloat = 0.012
+        let flat = mid.applyingFilter("CIDifferenceBlendMode", parameters: [kCIInputBackgroundImageKey: low])
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: -gain / 3, y: -gain / 3, z: -gain / 3, w: 0),
+                "inputGVector": CIVector(x: -gain / 3, y: -gain / 3, z: -gain / 3, w: 0),
+                "inputBVector": CIVector(x: -gain / 3, y: -gain / 3, z: -gain / 3, w: 0),
+                "inputBiasVector": CIVector(x: 1 + gain * threshold, y: 1 + gain * threshold, z: 1 + gain * threshold, w: 0)
+            ])
+            .applyingFilter("CIColorClamp")
+        let soft = low.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: fine,
+            kCIInputMaskImageKey: flat
+        ])
+
+        var mask = faceMask(faces: faces, extent: extent).cropped(to: region)
+        if let skinCube {
+            let skin = src.applyingFilter("CIColorCubeWithColorSpace", parameters: [
+                "inputCubeDimension": Self.skinCubeSize,
+                "inputCubeData": skinCube,
+                "inputColorSpace": Self.sRGB
+            ]).applyingGaussianBlur(sigma: 1.5 * scale).cropped(to: region)
+            mask = mask.applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: skin])
+        }
         let k = CGFloat(amount * 0.85)
-        let mask = faceMask(faces: faces, extent: extent).applyingFilter("CIColorMatrix", parameters: [
+        mask = mask.applyingFilter("CIColorMatrix", parameters: [
             "inputRVector": CIVector(x: k, y: 0, z: 0, w: 0),
             "inputGVector": CIVector(x: 0, y: k, z: 0, w: 0),
             "inputBVector": CIVector(x: 0, y: 0, z: k, w: 0)
         ])
-        let blend = CIFilter.blendWithMask()
-        blend.inputImage = soft
-        blend.backgroundImage = image
-        blend.maskImage = mask
-        return blend.outputImage ?? image
+        return soft.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: image.cropped(to: region),
+            kCIInputMaskImageKey: mask
+        ]).cropped(to: region).composited(over: image)
     }
 
     private func faceMask(faces: [Face], extent: CGRect) -> CIImage {
         if let cachedMask, cachedMaskExtent == extent { return cachedMask }
         var mask = CIImage(color: .black).cropped(to: extent)
         for face in faces {
-            let w = face.box.width * extent.width
-            let h = face.box.height * extent.height
-            let cx = extent.minX + face.box.midX * extent.width
-            let cy = extent.minY + face.box.midY * extent.height
+            let r = ellipseRect(face, in: extent)
             let gradient = CIFilter.radialGradient()
             gradient.center = .zero
             gradient.radius0 = 0.75
             gradient.radius1 = 1.0
             gradient.color0 = .white
             gradient.color1 = .black
-            let transform = CGAffineTransform(translationX: cx, y: cy + h * 0.05)
-                .scaledBy(x: w * 0.65, y: h * 0.75)
+            let transform = CGAffineTransform(translationX: r.midX, y: r.midY)
+                .scaledBy(x: r.width / 2, y: r.height / 2)
             let ellipse = gradient.outputImage!.transformed(by: transform).cropped(to: extent)
             mask = ellipse.applyingFilter("CIMaximumCompositing", parameters: [kCIInputBackgroundImageKey: mask])
         }
