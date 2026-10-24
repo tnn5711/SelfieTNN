@@ -42,6 +42,7 @@ struct GalleryView: View {
                                photos = PhotoStore.list()
                                selected = nil
                            })
+                .presentationBackground(.black)
             }
             .overlay(alignment: .bottom) {
                 if let toast {
@@ -82,6 +83,58 @@ private struct AsyncThumb: View {
     }
 }
 
+private struct ZoomableImage: UIViewRepresentable {
+    let image: UIImage
+
+    func makeUIView(context: Context) -> ZoomScrollView { ZoomScrollView(image: image) }
+    func updateUIView(_ view: ZoomScrollView, context: Context) {}
+}
+
+private final class ZoomScrollView: UIScrollView, UIScrollViewDelegate {
+    private let imageView = UIImageView()
+
+    init(image: UIImage) {
+        super.init(frame: .zero)
+        imageView.image = image
+        imageView.contentMode = .scaleAspectFit
+        imageView.isUserInteractionEnabled = true
+        addSubview(imageView)
+        delegate = self
+        minimumZoomScale = 1
+        maximumZoomScale = 6
+        showsHorizontalScrollIndicator = false
+        showsVerticalScrollIndicator = false
+        contentInsetAdjustmentBehavior = .never
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(doubleTapped(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        imageView.addGestureRecognizer(doubleTap)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // The frame can only be set while unzoomed; zooming drives it through the transform.
+        if zoomScale == 1 {
+            imageView.frame = bounds
+            contentSize = bounds.size
+        }
+    }
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+    @objc private func doubleTapped(_ gesture: UITapGestureRecognizer) {
+        if zoomScale > 1 {
+            setZoomScale(1, animated: true)
+        } else {
+            let p = gesture.location(in: imageView)
+            let size = CGSize(width: bounds.width / 3, height: bounds.height / 3)
+            zoom(to: CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2,
+                            width: size.width, height: size.height), animated: true)
+        }
+    }
+}
+
 private struct DetailView: View {
     let url: URL
     let onSaveToPhotos: () -> Void
@@ -97,9 +150,10 @@ private struct DetailView: View {
                         .onAppear { player = AVPlayer(url: url) }
                         .onDisappear { player?.pause() }
                 } else if let img = UIImage(contentsOfFile: url.path) {
-                    Image(uiImage: img).resizable().scaledToFit()
+                    ZoomableImage(image: img).ignoresSafeArea(edges: .bottom)
                 }
             }
+            .background(Color.black)
             .toolbar {
                 ToolbarItemGroup(placement: .bottomBar) {
                     Button("Save to Photos", systemImage: "square.and.arrow.down", action: onSaveToPhotos)

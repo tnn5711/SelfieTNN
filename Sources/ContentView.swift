@@ -36,7 +36,9 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            PreviewView(image: camera.previewImage).ignoresSafeArea()
+            Color.black.ignoresSafeArea()
+            PreviewView(image: camera.previewImage)
+                .aspectRatio(3.0 / 4.0, contentMode: .fit)
 
             if !camera.authorized {
                 Text("Camera access is required.\nEnable it in Settings.")
@@ -101,8 +103,8 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.25), value: countdown)
         .tint(.white)
         .preferredColorScheme(.dark)
-        .sheet(isPresented: $showGallery) { GalleryView() }
-        .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showGallery) { GalleryView().presentationBackground(Color(.systemBackground)) }
+        .sheet(isPresented: $showSettings) { SettingsView().presentationBackground(Color(.systemBackground)) }
         .onAppear { camera.start() }
         .onDisappear { cancelCountdown(); camera.stop() }
         .alert("Error", isPresented: Binding(get: { camera.errorMessage != nil },

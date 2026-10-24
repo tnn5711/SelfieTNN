@@ -5,7 +5,7 @@ import SwiftUI
 
 /// Keeps a salted SHA-256 hash of the 4-digit passcode in the Keychain (never the passcode itself).
 enum PasscodeStore {
-    static let defaultPasscode = "0612"
+    static let defaultPasscode = "0000"
     private static let service = "com.apptnn.SelfieTNN"
     private static let account = "passcode"
 
